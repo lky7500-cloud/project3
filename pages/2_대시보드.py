@@ -29,6 +29,9 @@ st.markdown('<div style="font-size:24px;font-weight:800;margin-bottom:16px">'
             '대시보드</div>', unsafe_allow_html=True)
 
 # ── 지표 카드 ─────────────────────────────────────────────────────
+# 8주차 화요일: st.metric으로 교체. 낮을수록 좋은 지표는 delta_color="inverse".
+HIGHER_IS_WORSE = {"평균 지연일수", "재작업률"}
+
 k = ui.guard(M.kpis, t)
 if k:
     m = ui.guard(M.monthly, t)
@@ -36,78 +39,132 @@ if k:
     for col, (name, v) in zip(cols, k.items()):
         with col:
             lv = M.status_of(name, v["value"])
-            st.markdown(ui.kpi_card(name, v["fmt"].format(v["value"]), "", lv),
-                        unsafe_allow_html=True)
-            # 추이가 있으면 스파크라인. 지표 이름과 열 이름이 같아야 그려진다.
-            if m is not None and name in getattr(m, "columns", []):
-                st.plotly_chart(
-                    charts.spark(m[name], C.COLORS[lv] if lv != "ok" else None),
-                    width="stretch", config={"displayModeBar": False},
-                    key=f"sp_{name}")
+            delta = None
+            if m is not None and name in getattr(m, "columns", []) and len(m) >= 2:
+                delta = float(m[name].iloc[-1] - m[name].iloc[-2])
+            st.metric(
+                label=name,
+                value=v["fmt"].format(v["value"]),
+                delta=(f"{delta:+.1f}" if delta is not None else None),
+                delta_color=("inverse" if name in HIGHER_IS_WORSE else "normal"),
+                border=True,
+            )
+            th = C.THRESHOLDS.get(name)
+            if th:
+                st.caption(f"경고선 {th['경고']} / 현재 {lv}")
     if not C.THRESHOLDS:
         st.caption("config.THRESHOLDS 가 비어 있어 전부 정상으로 표시됩니다. "
                    "임계값을 채우면 색이 갈립니다.")
 
-# ── 획득 퍼널 ─────────────────────────────────────────────────────
-ui.section("획득 퍼널", "그레인을 먼저 확인한다")
-f = ui.guard(M.funnel, t["08_결산체크리스트"])
-if f is not None:
-    left, right = st.columns([1.15, 1])
-    with left:
-        st.plotly_chart(charts.funnel_bars(f), width="stretch",
-                        config={"displayModeBar": False})
-        bn = f[f.is_bottleneck].iloc[0]
-        bi = max(int(f.index[f.label == bn.label][0]), 1)
-        prev = f.iloc[bi - 1]
-        ui.callout(
-            f"<b>병목은 {prev.label} → {bn.label}</b> 구간입니다. "
-            f"{prev.n:,} 중 {bn.n:,}만 넘어가 "
-            f"<b>{(1-bn.step_rate)*100:.1f}%가 이탈</b>합니다.")
+# ── 획득 퍼널 · 유지 퍼널 (탭 + 부분 재실행) ───────────────────────
+# 8주차 화요일: 기간 필터를 바꿔도 이 탭 안만 다시 그려지도록 @st.fragment로 뺐다.
 
-    with right:
-        # ★ Day3 — 분해 축. 내 데이터의 컬럼명으로 바꾼다.
-        DIMS = ["device", "channel"]
-        dim = st.radio("분해 축", DIMS, horizontal=True,
-                       label_visibility="collapsed")
-        i = st.selectbox(
-            "구간", range(len(f) - 1),
-            format_func=lambda i: f"{f.label.iloc[i]} → {f.label.iloc[i+1]}",
-            index=min(bi - 1, len(f) - 2))
-        g = ui.guard(M.funnel_by, t["08_결산체크리스트"], t["08_결산체크리스트"], dim,
-                     f.step.iloc[i], f.step.iloc[i + 1])
-        if g is not None and len(g):
-            st.plotly_chart(charts.device_compare(g), width="stretch",
+
+@st.fragment
+def _render_acquisition_tab():
+    ui.section("획득 퍼널", "그레인을 먼저 확인한다")
+
+    months = sorted(t["08_결산체크리스트"]["회계기간"].astype(str).unique())
+    lo, hi_m = st.select_slider("기간", options=months,
+                                value=(months[0], months[-1]), key="acq_period")
+    df = t["08_결산체크리스트"]
+    df = df[(df["회계기간"].astype(str) >= lo) & (df["회계기간"].astype(str) <= hi_m)]
+
+    f = ui.guard(M.funnel, df)
+    if f is not None:
+        left, right = st.columns([1.15, 1])
+        with left:
+            st.plotly_chart(charts.funnel_bars(f), width="stretch",
                             config={"displayModeBar": False})
-            hi = g.loc[g.전환율.idxmax()]
-            lo = g.loc[g.전환율.idxmin()]
-            if hi[g.columns[0]] != lo[g.columns[0]]:
-                ui.callout(
-                    f"<b>{lo[g.columns[0]]}</b>이(가) 전체의 "
-                    f"<b>{lo.비중*100:.1f}%</b>인데 전환율은 "
-                    f"<b>{lo.전환율*100:.1f}%</b>로 "
-                    f"{hi[g.columns[0]]}({hi.전환율*100:.1f}%)보다 "
-                    f"<b>{(hi.전환율-lo.전환율)*100:.1f}%p 낮습니다.</b>")
+            bn = f[f.is_bottleneck].iloc[0]
+            bi = max(int(f.index[f.label == bn.label][0]), 1)
+            prev = f.iloc[bi - 1]
+            ui.callout(
+                f"<b>병목은 {prev.label} → {bn.label}</b> 구간입니다. "
+                f"{prev.n:,} 중 {bn.n:,}만 넘어가 "
+                f"<b>{(1-bn.step_rate)*100:.1f}%가 이탈</b>합니다.")
 
-# ── 유지 퍼널 ─────────────────────────────────────────────────────
-ui.section("유지 퍼널", "데려온 대상이 남는가")
-if not C.RETENTION_STEPS:
-    st.caption("config.RETENTION_STEPS 가 비어 있습니다. "
-               "7주차에 정한 유지·이탈의 정의를 옮기면 여기에 그려집니다.")
-rf = ui.guard(M.retention_funnel, t)
-if rf is not None and len(rf):
-    if "is_bottleneck" not in rf.columns:
-        rf = rf.assign(is_bottleneck=False)
-    c1, c2 = st.columns([1.15, 1])
-    with c1:
-        st.plotly_chart(charts.funnel_bars(rf), width="stretch",
-                        config={"displayModeBar": False})
-    with c2:
-        ui.callout(
-            "유지는 <b>관측 기간이 대상마다 다릅니다.</b> "
-            "먼저 들어온 대상은 오래 관측됐고 나중에 들어온 대상은 짧게 관측됐습니다. "
-            "<b>누적값으로 비교하면 기간의 그림자를 효과로 착각합니다.</b> "
-            "비율(단위 기간당)로 바꾸거나 같은 시점에 시작한 것끼리 묶으십시오.",
-            "info")
+            # 8주차 화요일: 퍼널 표 (숫자만으로는 병목이 눈에 안 들어온다)
+            ft = f.copy()
+            ft["단계전환율"] = ft["step_rate"].fillna(1.0)
+            ft["누적전환율"] = ft["cum_rate"]
+            st.dataframe(
+                ft[["label", "n", "단계전환율", "누적전환율"]],
+                column_config={
+                    "label": st.column_config.TextColumn("단계"),
+                    "n": st.column_config.NumberColumn("도달 수", format="%,d"),
+                    # 이 Streamlit 버전(1.59.2)은 printf식 "%.1f%%"가 0~1 값을
+                    # 자동으로 ×100 하지 않는다. 내장 "percent" 포맷을 쓴다.
+                    "단계전환율": st.column_config.ProgressColumn(
+                        "단계 전환율", min_value=0, max_value=1, format="percent"),
+                    "누적전환율": st.column_config.ProgressColumn(
+                        "누적 전환율", min_value=0, max_value=1, format="percent"),
+                },
+                hide_index=True, width="stretch",
+            )
+
+        with right:
+            # ★ Day3 — 분해 축. 내 데이터의 컬럼명으로 바꾼다.
+            DIMS = ["device", "channel"]
+            dim = st.radio("분해 축", DIMS, horizontal=True,
+                           label_visibility="collapsed")
+            i = st.selectbox(
+                "구간", range(len(f) - 1),
+                format_func=lambda i: f"{f.label.iloc[i]} → {f.label.iloc[i+1]}",
+                index=min(bi - 1, len(f) - 2))
+            g = ui.guard(M.funnel_by, df, df, dim,
+                         f.step.iloc[i], f.step.iloc[i + 1])
+            if g is not None and len(g):
+                st.plotly_chart(charts.device_compare(g), width="stretch",
+                                config={"displayModeBar": False})
+                hi = g.loc[g.전환율.idxmax()]
+                lo2 = g.loc[g.전환율.idxmin()]
+                if hi[g.columns[0]] != lo2[g.columns[0]]:
+                    ui.callout(
+                        f"<b>{lo2[g.columns[0]]}</b>이(가) 전체의 "
+                        f"<b>{lo2.비중*100:.1f}%</b>인데 전환율은 "
+                        f"<b>{lo2.전환율*100:.1f}%</b>로 "
+                        f"{hi[g.columns[0]]}({hi.전환율*100:.1f}%)보다 "
+                        f"<b>{(hi.전환율-lo2.전환율)*100:.1f}%p 낮습니다.</b>")
+
+
+@st.fragment
+def _render_retention_tab():
+    ui.section("유지 퍼널", "데려온 대상이 남는가")
+    if not C.RETENTION_STEPS:
+        st.caption("config.RETENTION_STEPS 가 비어 있습니다. "
+                   "7주차에 정한 유지·이탈의 정의를 옮기면 여기에 그려집니다.")
+        return
+
+    months = sorted(t["08_결산체크리스트"]["회계기간"].astype(str).unique())
+    lo, hi_m = st.select_slider("기간", options=months,
+                                value=(months[0], months[-1]), key="ret_period")
+    df = t["08_결산체크리스트"]
+    df = df[(df["회계기간"].astype(str) >= lo) & (df["회계기간"].astype(str) <= hi_m)]
+    tt = {**t, "08_결산체크리스트": df}
+
+    rf = ui.guard(M.retention_funnel, tt)
+    if rf is not None and len(rf):
+        if "is_bottleneck" not in rf.columns:
+            rf = rf.assign(is_bottleneck=False)
+        c1, c2 = st.columns([1.15, 1])
+        with c1:
+            st.plotly_chart(charts.funnel_bars(rf), width="stretch",
+                            config={"displayModeBar": False})
+        with c2:
+            ui.callout(
+                "유지는 <b>관측 기간이 대상마다 다릅니다.</b> "
+                "먼저 들어온 대상은 오래 관측됐고 나중에 들어온 대상은 짧게 관측됐습니다. "
+                "<b>누적값으로 비교하면 기간의 그림자를 효과로 착각합니다.</b> "
+                "비율(단위 기간당)로 바꾸거나 같은 시점에 시작한 것끼리 묶으십시오.",
+                "info")
+
+
+tab_acq, tab_ret = st.tabs(["획득 퍼널", "유지 퍼널"])
+with tab_acq:
+    _render_acquisition_tab()
+with tab_ret:
+    _render_retention_tab()
 
 # ── 실험 ──────────────────────────────────────────────────────────
 ui.section("실험 결과", "믿을 수 있는지 먼저 보고, 그 다음에 지표를 본다")

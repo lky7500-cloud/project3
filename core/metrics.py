@@ -136,11 +136,36 @@ def retention_funnel(t: dict) -> pd.DataFrame:
     7주차 토요일에 겪은 생존 편향이 여기서 다시 나온다.
 
     반환: DataFrame[step, label, n, step_rate, cum_rate]
+
+    8주차 화요일 확정 — 그레인: 계정과목(대상 하나, 대상×기간이 아니다).
+    계정과목×회계기간별 최종승인율을 구해 50% 미만인 월을 "문제월"로 보고,
+    그 최장 연속 개월수로 config.RETENTION_STEPS 3단계를 판정한다.
     """
-    todo("Day2 실습 D", "유지 퍼널",
-         "7주차에 정한 유지·이탈의 정의를 config.RETENTION_STEPS 에 옮기고 "
-         "그레인을 다시 확인하십시오.",
-         "core/metrics.py  retention_funnel()")
+    df = t[C.TABLES[0]]
+    piv = df.assign(승인=(df["최종승인"] == "Y").astype(int))
+    g = (piv.groupby(["계정과목", "회계기간"], observed=True)["승인"].mean()
+         .reset_index().sort_values(["계정과목", "회계기간"]))
+
+    max_streak: dict[str, int] = {}
+    for acct, sub in g.groupby("계정과목", observed=True):
+        streak = best = 0
+        for ok in sub["승인"] >= 0.5:
+            streak = 0 if ok else streak + 1
+            best = max(best, streak)
+        max_streak[str(acct)] = best
+
+    thresholds = [1, 2, 3]
+    ns = [sum(1 for v in max_streak.values() if v >= th) for th in thresholds]
+    first_n = ns[0]
+    rows, prev_n = [], None
+    for (step, _cond), n in zip(C.RETENTION_STEPS, ns):
+        rows.append({
+            "step": step, "label": step, "n": n,
+            "step_rate": (n / prev_n) if prev_n else np.nan,
+            "cum_rate": (n / first_n) if first_n else np.nan,
+        })
+        prev_n = n
+    return pd.DataFrame(rows)
 
 
 # ── KPI ───────────────────────────────────────────────────────────
@@ -169,10 +194,26 @@ def kpis(t: dict) -> dict:
             "ARPU": {"value": float(t["usage_monthly"].billing_amount.mean()),
                      "unit": "원", "fmt": "{:,.0f}원"},
         }
+
+    8주차 화요일 확정 — 규모·전환·속도·품질 네 축에서 하나씩:
+
+        최종승인율(전환)  최종승인='Y' 건수 ÷ 전체 건수
+        완료율(가드레일)  완료여부='Y' 건수 ÷ 전체 건수
+        평균 지연일수(속도) 지연일수 컬럼 평균
+        재작업률(품질)     검토횟수 >= 3 건수 ÷ 전체 건수
     """
-    todo("Day2 실습 E", "지표 카드",
-         "내 데이터에서 금액·이탈에 해당하는 컬럼이 무엇입니까? 없는 지표는 빼십시오.",
-         "core/metrics.py  kpis()")
+    df = t[C.TABLES[0]]
+    n = len(df)
+    return {
+        "최종승인율": {"value": (df["최종승인"] == "Y").mean() * 100,
+                    "unit": "%", "fmt": "{:.1f}%"},
+        "완료율": {"value": (df["완료여부"] == "Y").mean() * 100,
+                 "unit": "%", "fmt": "{:.1f}%"},
+        "평균 지연일수": {"value": float(df["지연일수"].mean()),
+                     "unit": "일", "fmt": "{:.1f}일"},
+        "재작업률": {"value": (df["검토횟수"] >= 3).mean() * 100,
+                  "unit": "%", "fmt": "{:.1f}%"},
+    }
 
 
 @st.cache_data(show_spinner=False)
@@ -185,10 +226,22 @@ def monthly(t: dict) -> pd.DataFrame:
     기간이 짧아 월별로 나눌 수 없으면 주별로 해도 되고, 아예 빼도 된다.
 
     반환: 인덱스가 기간(예 "2025-01"), 열이 지표인 DataFrame
+
+    8주차 화요일 확정 — 회계기간(월) 그대로 사용. kpis()의 지표 이름과
+    열 이름을 맞춘다.
     """
-    todo("Day2 실습 E", "기간별 추이",
-         "기간을 무엇으로 자릅니까? 월이 너무 길면 주로 자르십시오.",
-         "core/metrics.py  monthly()")
+    df = t[C.TABLES[0]]
+    g = df.groupby("회계기간", observed=True)
+    out = pd.DataFrame({
+        "최종승인율": g.apply(lambda x: (x["최종승인"] == "Y").mean() * 100,
+                          include_groups=False),
+        "완료율": g.apply(lambda x: (x["완료여부"] == "Y").mean() * 100,
+                        include_groups=False),
+        "평균 지연일수": g["지연일수"].mean(),
+        "재작업률": g.apply(lambda x: (x["검토횟수"] >= 3).mean() * 100,
+                        include_groups=False),
+    })
+    return out.sort_index()
 
 
 def status_of(name: str, value: float) -> str:
@@ -201,7 +254,8 @@ def status_of(name: str, value: float) -> str:
     if not th:
         return "ok"
     # ★ 높을수록 나쁜 지표. 내 지표 이름을 넣는다.
-    higher_is_worse = {"이탈률", "이탈율", "해지율", "불량률", "반품률"}
+    higher_is_worse = {"이탈률", "이탈율", "해지율", "불량률", "반품률",
+                       "평균 지연일수", "재작업률"}
     if name in higher_is_worse:
         return ("block" if value > th["위험"]
                 else "warn" if value > th["경고"] else "ok")
