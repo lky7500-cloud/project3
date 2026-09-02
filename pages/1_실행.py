@@ -138,7 +138,7 @@ if run["step"] >= 3 and not gates.is_passed(run, 1):
 # ── 4. 계산 ───────────────────────────────────────────────────────
 if gates.is_passed(run, 1):
     ui.section("4. 계산")
-    f = ui.guard(M.funnel, tables["funnel_events"])
+    f = ui.guard(M.funnel, tables["08_결산체크리스트"])
     k = ui.guard(M.kpis, tables)
     if f is None or k is None:
         st.stop()

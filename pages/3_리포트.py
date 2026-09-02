@@ -7,6 +7,7 @@
 import streamlit as st
 
 from core import config as C, gates, load, metrics as M
+from core.todo import NotYet
 from report import sections as S, to_pdf
 from viz import pdf_charts, ui
 
@@ -74,14 +75,18 @@ with body:
             st.caption("✓ 인과 단정 표현 검사 통과")
 
         if "funnel" in sec.get("charts", []):
-            f = M.funnel(t["funnel_events"])
+            f = M.funnel(t["08_결산체크리스트"])
             st.image(pdf_charts.funnel_png(f), width="stretch")
         if "device" in sec.get("charts", []):
-            f = M.funnel(t["funnel_events"])
+            f = M.funnel(t["08_결산체크리스트"])
             bi = max(int(f.index[f.is_bottleneck][0]), 1)
-            g = M.funnel_by(t["funnel_events"], t["sessions"], DIM,
-                            f.step.iloc[bi - 1], f.step.iloc[bi])
-            st.image(pdf_charts.device_png(g), width="stretch")
+            try:
+                g = M.funnel_by(t["08_결산체크리스트"], t["08_결산체크리스트"], DIM,
+                                f.step.iloc[bi - 1], f.step.iloc[bi])
+                st.image(pdf_charts.device_png(g), width="stretch")
+            except NotYet:
+                # funnel_by()는 Day3 실습 B에서 채운다. 그때까지는 이 차트만 빠진다.
+                st.caption("★ 분해 차트는 Day3에 준비됩니다.")
         if "experiments" in sec.get("charts", []):
             st.image(pdf_charts.experiments_png(M.experiment_results(t)),
                      width="stretch")
@@ -104,15 +109,16 @@ with c1:
     st.markdown("**PDF** — 표지 · 목차 · 차트 포함")
     if st.button("PDF 만들기", type="primary"):
         with st.spinner("차트를 그리고 PDF를 조립하는 중..."):
-            f = M.funnel(t["funnel_events"])
+            f = M.funnel(t["08_결산체크리스트"])
             bi = max(int(f.index[f.is_bottleneck][0]), 1)
-            g = M.funnel_by(t["funnel_events"], t["sessions"], DIM,
-                            f.step.iloc[bi - 1], f.step.iloc[bi])
-            charts = {
-                "funnel": pdf_charts.funnel_png(f),
-                "device": pdf_charts.device_png(g),
-                "experiments": pdf_charts.experiments_png(M.experiment_results(t)),
-            }
+            charts = {"funnel": pdf_charts.funnel_png(f)}
+            try:
+                g = M.funnel_by(t["08_결산체크리스트"], t["08_결산체크리스트"], DIM,
+                                f.step.iloc[bi - 1], f.step.iloc[bi])
+                charts["device"] = pdf_charts.device_png(g)
+            except NotYet:
+                pass  # funnel_by()는 Day3 실습 B에서 채운다. 그때까지는 PDF에서 빠진다.
+            charts["experiments"] = pdf_charts.experiments_png(M.experiment_results(t))
             pdf = to_pdf.build_pdf(secs, charts)
         st.session_state.pdf = pdf
         st.success(f"생성 완료 · {len(pdf)/1024:.0f}KB")
