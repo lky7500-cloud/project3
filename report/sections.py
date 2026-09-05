@@ -213,6 +213,64 @@ def _s7_limits(t: dict, rows: list[dict] | None = None) -> dict:
     return {"title": "7. 한계", "kind": "auto", "body": "\n".join(lines)}
 
 
+def human_guide(t: dict) -> dict[str, dict[str, list[str]]]:
+    """2·6·8장(사람이 쓰는 장) 작성 가이드.
+
+    **문장을 대신 써주지 않는다.** 실제 값을 참고 삼아 "이런 걸 설명하면
+    좋다"는 항목만 안내하고, "담당자가 직접 결정할 내용"은 답을 주지 않고
+    무엇을 정해야 하는지만 짚는다 — 결론은 사람이 낸다.
+
+    반환: {장 제목: {"suggest": [...], "decide": [...]}}
+    """
+    df = t[C.TABLES[0]]
+    lo, hi = C.PERIOD
+    f = M.funnel(df)
+    bi = int(f.index[f.is_bottleneck][0])
+    g = M.funnel_by(df, df, RESULT_DIM, f.step.iloc[bi - 1], f.step.iloc[bi])
+    dim_col = g.columns[0]
+    best = g.loc[g["전환율"].idxmax()]
+    worst = g.loc[g["전환율"].idxmin()]
+    gap = (best["전환율"] - worst["전환율"]) * 100
+    hidden_n = sum(1 for r in s7_limit_rows(t)
+                   if r["출처"] == "못 한 것" and "판정하지 않았다" in r["내용"])
+    hc = M.half_year_comparison(t)
+    year = lo[:4] if lo[:4] == hi[:4] else f"{lo[:4]}~{hi[:4]}"
+
+    return {
+        "2. 배경": {
+            "suggest": [
+                f"왜 {year}년 {C.DATASET} 이행 현황을 점검하는지",
+                f"병목 구간({f.label.iloc[bi - 1]}→{f.label.iloc[bi]}, "
+                f"{f.step_rate.iloc[bi] * 100:.1f}%)을 보게 된 계기",
+                f"{dim_col} 간 격차({gap:.1f}%p)를 확인하게 된 배경",
+                f"표본 부족으로 판정을 미룬 항목({hidden_n}건)을 왜 지금 "
+                f"함께 다루는지",
+            ],
+            "decide": ["실제 보고 대상", "실제 업무 목적",
+                      "이번 보고서를 통해 결정하려는 사항"],
+        },
+        "6. 해석": {
+            "suggest": [
+                f"{dim_col} 간 격차가 {worst[dim_col]}({worst['전환율'] * 100:.1f}%)"
+                f"~{best[dim_col]}({best['전환율'] * 100:.1f}%)로 벌어진다는 사실",
+                f'반기 비교가 "{hc["verdict"]}"으로 판정된 것이 실패가 아니라 '
+                f"정직한 결과라는 점",
+                f"표본 부족으로 못 본 항목({hidden_n}건)이 앞으로 더 볼 가치가 "
+                f"있는지",
+            ],
+            "decide": ["격차의 원인으로 무엇을 의심하는지(데이터로는 가릴 수 없다)",
+                      "이 숫자가 실제 업무에서 무엇을 뜻하는지"],
+        },
+        "8. 제안": {
+            "suggest": [
+                f"격차가 큰 {dim_col}·항목에 대해 무엇을 할 것인지",
+                "지금 하지 않을 것은 무엇이고 왜 미루는지",
+            ],
+            "decide": ["실제 조치 여부와 시점", "조치 우선순위"],
+        },
+    }
+
+
 # ── 사람이 쓰는 장 (제공) ─────────────────────────────────────────
 def _s2_background(human: dict) -> dict:
     return {
