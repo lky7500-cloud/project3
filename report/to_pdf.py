@@ -90,8 +90,7 @@ def build_pdf(sections: list[dict], charts: dict[str, bytes],
     for s in sections:
         pdf.set_font(pdf.base, "", 11)
         pdf.set_text_color(*INK)
-        mark = "" if s["kind"] == "auto" else "  (사람 작성)"
-        pdf.cell(0, 8, s["title"] + mark, new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(0, 8, s["title"], new_x="LMARGIN", new_y="NEXT")
 
     # ── 본문 ──────────────────────────────────────────────────────
     # ★ 장마다 새 페이지를 강제하지 않는다. 짧은 장(배경·제안 등)이 백지 한
