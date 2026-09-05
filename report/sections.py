@@ -114,8 +114,9 @@ def _s4_results(t: dict) -> dict:
     for r in g.itertuples():
         lines.append(f"  {getattr(r, dim_col)}: {r.도달}건 중 {r.전환}건 ({r.전환율 * 100:.1f}%)")
 
-    best = g.loc[g["전환율"].idxmax()]
-    worst = g.loc[g["전환율"].idxmin()]
+    # funnel_by()가 이미 전환율 오름차순으로 정렬해 돌려준다 — 맨 앞이 최저,
+    # 맨 뒤가 최고다. idxmax/idxmin 대신 위치로 집어 pandas 버전 차이를 피한다.
+    worst, best = g.iloc[0], g.iloc[-1]
     lines.append("")
     lines.append(f"{dim_col} 간 격차: {best[dim_col]}({best.전환율 * 100:.1f}%) - "
                  f"{worst[dim_col]}({worst.전환율 * 100:.1f}%) = "
@@ -228,8 +229,8 @@ def human_guide(t: dict) -> dict[str, dict[str, list[str]]]:
     bi = int(f.index[f.is_bottleneck][0])
     g = M.funnel_by(df, df, RESULT_DIM, f.step.iloc[bi - 1], f.step.iloc[bi])
     dim_col = g.columns[0]
-    best = g.loc[g["전환율"].idxmax()]
-    worst = g.loc[g["전환율"].idxmin()]
+    # funnel_by()가 전환율 오름차순으로 정렬해 돌려준다 — 위치로 집는다.
+    worst, best = g.iloc[0], g.iloc[-1]
     gap = (best["전환율"] - worst["전환율"]) * 100
     hidden_n = sum(1 for r in s7_limit_rows(t)
                    if r["출처"] == "못 한 것" and "판정하지 않았다" in r["내용"])

@@ -131,7 +131,11 @@ with body:
                    "그려지지 않고, 저장을 눌러야 반영됩니다.")
         placeholders = {s["title"]: s["placeholder"] for s in secs
                         if s["kind"] == "human"}
-        guide = S.human_guide(t)
+        try:
+            guide = S.human_guide(t)
+        except Exception as e:
+            guide = {}
+            st.caption(f"⚠ 작성 가이드를 만들지 못했습니다({e}). 폼은 그대로 씁니다.")
         for title in HUMAN_TITLES:
             existing = st.session_state.human.get(title, "")
             if existing.strip():
@@ -142,15 +146,16 @@ with body:
         with st.form("사람이 쓰는 장"):
             drafts = {}
             for title in HUMAN_TITLES:
-                g = guide[title]
-                st.markdown(
-                    '<div class="callout info" style="margin-bottom:6px">'
-                    '<b>이 장에서 설명하면 좋은 내용</b><br>'
-                    + "".join(f"· {x}<br>" for x in g["suggest"])
-                    + '<div style="margin-top:8px"><b>담당자가 직접 결정할 '
-                      '내용</b></div>'
-                    + "".join(f"· {x}<br>" for x in g["decide"])
-                    + '</div>', unsafe_allow_html=True)
+                g = guide.get(title)
+                if g:
+                    st.markdown(
+                        '<div class="callout info" style="margin-bottom:6px">'
+                        '<b>이 장에서 설명하면 좋은 내용</b><br>'
+                        + "".join(f"· {x}<br>" for x in g["suggest"])
+                        + '<div style="margin-top:8px"><b>담당자가 직접 결정할 '
+                          '내용</b></div>'
+                        + "".join(f"· {x}<br>" for x in g["decide"])
+                        + '</div>', unsafe_allow_html=True)
                 drafts[title] = st.text_area(
                     title, value=st.session_state.human.get(title, ""),
                     placeholder=placeholders[title], height=150,
