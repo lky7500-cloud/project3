@@ -103,10 +103,21 @@ def funnel_by(fe: pd.DataFrame, se: pd.DataFrame, dim: str,
     나눠서 격차가 보여도 우리가 못 바꾸는 것이면 분해할 이유가 적다.
 
     반환: DataFrame[<dim>, 도달, 전환, 전환율, 비중]
+
+    8주차 목요일 확정 — 완료여부/최종승인 두 플래그로 도달·전환을 판정한다
+    (등록은 전체 행, 완료는 완료여부='Y', 최종승인은 최종승인='Y').
+    두 번째 인자(se)는 이 도메인엔 테이블이 하나뿐이라 fe와 동일한 것을 받는다.
     """
-    todo("Day3 실습 B", "분해",
-         "무엇으로 쪼갤지 정하십시오. 쪼개서 격차가 보이면 손을 쓸 수 있습니까?",
-         "core/metrics.py  funnel_by()")
+    flag = {"등록": None, "완료": "완료여부", "최종승인": "최종승인"}
+    base = fe if step_from == "등록" else fe[fe[flag[step_from]] == "Y"]
+    reached = base if step_to == "등록" else base[base[flag[step_to]] == "Y"]
+
+    n_base = base.groupby(dim, observed=True).size()
+    n_reach = reached.groupby(dim, observed=True).size().reindex(n_base.index).fillna(0).astype(int)
+    out = pd.DataFrame({"도달": n_base, "전환": n_reach}).reset_index()
+    out["전환율"] = out["전환"] / out["도달"]
+    out["비중"] = out["도달"] / out["도달"].sum()
+    return out.sort_values("전환율")
 
 
 # ── 유지 퍼널 ─────────────────────────────────────────────────────
@@ -312,27 +323,17 @@ def srm_check(asg: pd.DataFrame, exp_id: str) -> dict:
             "ratio": (c / (c + t), t / (c + t))}
 
 
-def trust_check(srm: dict, n_total: int, days: int | None = None) -> str | None:
-    """이 실험을 믿을 수 있는가. **계산하기 전에** 묻는다.
-
-    ★ Day3 실습 C에서 채웁니다. ← 오늘의 핵심
+def trust_check(n_total: int, days_a: int | None = None,
+                 days_b: int | None = None) -> str | None:
+    """이 비교를 믿을 수 있는가. **계산하기 전에** 묻는다.
 
     ────────────────────────────────────────────────────────────
     오늘의 어려운 일은 계산이 아니다.
     **계산은 이미 할 수 있는데, 화면에 안 그리는 코드를 쓰는 것**이다.
     ────────────────────────────────────────────────────────────
 
-    못 믿을 조건은 셋인데 **분기는 하나**다.
-
-        배정이 깨졌다      srm["ok"] 가 False
-                          → 어떤 효과가 나와도 해석할 수 없다
-        표본이 모자란다    n_total 이 config.MIN_SAMPLE 미만
-                          → 계산해도 못 믿는다. 내 데이터는 대개 여기 걸린다
-        기간이 안 찼다     days 가 최소 기간 미만
-                          → 초기 효과가 남아 있다
-
     하나라도 걸리면 **사유 문자열**을 돌려준다. 돌려주면
-    experiment_results() 가 거기서 멈추고 **지표를 계산하지 않는다.**
+    호출하는 쪽이 거기서 멈추고 **지표를 계산하지 않는다.**
     다 통과하면 None 을 돌려준다.
 
     "그래도 회색으로라도 보여주면 안 되나요?"
@@ -340,12 +341,72 @@ def trust_check(srm: dict, n_total: int, days: int | None = None) -> str | None:
         안 됩니다. **사람은 본 숫자를 기억합니다.**
         옆에 아무리 경고를 붙여도 회의실에서 인용되는 것은 숫자입니다.
 
+    8주차 목요일 확정 — 실험이 없는 도메인이라 배정 공정성(SRM) 대신
+    표본과 비교 기간 길이만 본다. 못 믿을 조건 둘:
+
+        표본이 30건 미만(config.MIN_SAMPLE)       → 계산은 되지만 값이 흔들린다
+        비교하는 두 기간 길이가 20% 이상 다름      → 공정한 비교가 아니다
+
     반환: 못 믿을 이유(str) 또는 None
     """
-    todo("Day3 실습 C", "못 믿을 조건 분기",
-         "배정·표본·기간 셋 중 하나라도 걸리면 사유를 돌려주십시오. "
-         "돌려주면 지표를 계산하지 않습니다.",
-         "core/metrics.py  trust_check()")
+    if n_total < C.MIN_SAMPLE:
+        return f"표본 {n_total}건 (최소 {C.MIN_SAMPLE})"
+    if days_a is not None and days_b is not None:
+        longer, shorter = max(days_a, days_b), min(days_a, days_b)
+        if shorter == 0 or (longer - shorter) / longer >= 0.2:
+            return f"비교 기간 길이 불일치 ({days_a}일 vs {days_b}일)"
+    return None
+
+
+@st.cache_data(show_spinner=False)
+def half_year_comparison(t: dict) -> dict:
+    """반기 전후 비교 판정 카드. 실험이 없는 도메인이라 이것이 실험 카드를 대신한다.
+
+    8주차 목요일 확정 — 주지표: 최종승인율, 가드레일: 완료율.
+    판정 순서(1부 판단 기준 그대로): 못 믿을 조건 → 주지표 → 가드레일.
+
+        믿을 수 없다                        → "무효" (계산하지 않는다)
+        주지표 변화 5%p 미만                → "효과 없음"
+        가드레일(완료율) 2%p 이상 나빠짐     → "주의 필요"
+        주지표가 나빠지는 쪽으로 5%p 이상    → "악화"
+        그 외(개선 + 가드레일 이상 없음)     → "성공"
+
+    이 비교는 인과를 주장할 수 없다. 무작위 배정이 없었으므로 다른 요인의
+    영향을 배제하지 못한다 — 카드 문구에 반드시 포함한다.
+    """
+    df = t[C.TABLES[0]]
+    period = df["회계기간"].astype(str)
+    is_h1 = period <= "2026-06"
+    h1, h2 = df[is_h1], df[~is_h1]
+    n1, n2 = len(h1), len(h2)
+
+    days_a = (pd.Timestamp("2026-06-30") - pd.Timestamp("2026-01-01")).days
+    days_b = (pd.Timestamp("2026-12-31") - pd.Timestamp("2026-07-01")).days
+    row = {"primary": "최종승인율", "guardrail": "완료율",
+           "period_a": "2026 상반기", "period_b": "2026 하반기",
+           "n1": n1, "n2": n2, "days_a": days_a, "days_b": days_b}
+
+    reason = trust_check(min(n1, n2), days_a, days_b)
+    if reason:
+        row.update(verdict="무효", color="block", reason=reason)
+        return row
+
+    r1, r2 = (h1["최종승인"] == "Y").mean() * 100, (h2["최종승인"] == "Y").mean() * 100
+    g1, g2 = (h1["완료여부"] == "Y").mean() * 100, (h2["완료여부"] == "Y").mean() * 100
+    delta, g_delta = r2 - r1, g2 - g1
+    row.update(r1=r1, r2=r2, delta=delta, g1=g1, g2=g2, g_delta=g_delta)
+
+    if abs(delta) < 5:
+        row.update(verdict="효과 없음", color="none",
+                    reason="주지표 변화가 5%p 미만입니다")
+    elif g_delta <= -2:
+        row.update(verdict="주의 필요", color="warn",
+                    reason="주지표는 움직였으나 가드레일(완료율)이 나빠졌습니다")
+    elif delta < 0:
+        row.update(verdict="악화", color="block", reason="")
+    else:
+        row.update(verdict="성공", color="ok", reason="")
+    return row
 
 
 @st.cache_data(show_spinner=False)

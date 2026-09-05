@@ -12,6 +12,15 @@ import streamlit as st
 from core import config as C, load, metrics as M
 from viz import charts, ui
 
+
+# 8주차 목요일 — 감춘 이유를 그 자리에서 보여준다. 지표 값·증감·p값은 넣지 않는다.
+@st.dialog("이 값을 왜 보여주지 않나")
+def _why_hidden(label: str, dim_col: str, reason: str) -> None:
+    st.table({
+        "항목": [dim_col, "걸린 조건", "무엇을 하면 믿을 수 있는가"],
+        "값": [label, reason, "표본이 config.MIN_SAMPLE(30건) 이상 쌓일 때까지 기다린 뒤 다시 계산한다"],
+    })
+
 st.set_page_config(page_title="대시보드", page_icon="📊", layout="wide",
                    initial_sidebar_state="expanded")
 ui.css()
@@ -31,6 +40,16 @@ st.markdown('<div style="font-size:24px;font-weight:800;margin-bottom:16px">'
 # ── 지표 카드 ─────────────────────────────────────────────────────
 # 8주차 화요일: st.metric으로 교체. 낮을수록 좋은 지표는 delta_color="inverse".
 HIGHER_IS_WORSE = {"평균 지연일수", "재작업률"}
+# 8주차 목요일: 지표 옆 정의 팝오버(계산식 + 임계값 근거)
+DEFS = {
+    "최종승인율": "최종승인='Y' 건수 ÷ 전체 건수.\n\n경고 42.9% / 위험 32.9% — "
+                 "현재값 대비 상대 하락 10%p/20%p (최근 12개월 변동폭이 26.7~76.5%로 커서 절대선 대신 상대선 채택)",
+    "완료율": "완료여부='Y' 건수 ÷ 전체 건수.\n\n경고 90% / 위험 85% — "
+             "최근 12개월 최저치(88.2%)보다 낮게 위험선을 잡았다(실제로 안 벌어졌던 수준)",
+    "평균 지연일수": "지연일수 컬럼 평균.\n\n경고 2.0일 / 위험 3.0일 — 최근 12개월 관측 최댓값(2.0일) 부근",
+    "재작업률": "검토횟수 >= 3 건수 ÷ 전체 건수.\n\n경고 55% / 위험 65% — "
+              "최근 12개월 관측 최댓값(58.8%) 부근. 근거 약함(실제 업무 부담 기준 미확인)",
+}
 
 k = ui.guard(M.kpis, t)
 if k:
@@ -49,6 +68,9 @@ if k:
                 delta_color=("inverse" if name in HIGHER_IS_WORSE else "normal"),
                 border=True,
             )
+            if name in DEFS:
+                with st.popover("정의", use_container_width=False):
+                    st.write(DEFS[name])
             th = C.THRESHOLDS.get(name)
             if th:
                 st.caption(f"경고선 {th['경고']} / 현재 {lv}")
@@ -56,17 +78,40 @@ if k:
         st.caption("config.THRESHOLDS 가 비어 있어 전부 정상으로 표시됩니다. "
                    "임계값을 채우면 색이 갈립니다.")
 
+# ── 분해 축 · 기간 필터 (URL과 연결, fragment 밖) ───────────────────
+# 8주차 목요일: st.fragment 안에서 query_params를 갱신하면 조각만 다시 그려져
+# URL과 화면이 어긋날 수 있다. 그래서 이 필터는 fragment 밖에 둔다.
+ALL_MONTHS = sorted(t["08_결산체크리스트"]["회계기간"].astype(str).unique())
+DIMS = ["담당자", "계정과목", "사업부"]
+
+_qp = st.query_params
+_default_dim = _qp.get("axis") if _qp.get("axis") in DIMS else DIMS[0]
+_default_lo = _qp.get("from") if _qp.get("from") in ALL_MONTHS else ALL_MONTHS[0]
+_default_hi = _qp.get("to") if _qp.get("to") in ALL_MONTHS else ALL_MONTHS[-1]
+
+_f1, _f2 = st.columns([1, 2])
+with _f1:
+    dim = st.segmented_control("분해 축", DIMS, default=_default_dim,
+                                required=True, key="dim_select")
+with _f2:
+    acq_lo, acq_hi = st.select_slider(
+        "기간", options=ALL_MONTHS, value=(_default_lo, _default_hi), key="acq_period")
+
+st.query_params["axis"] = dim
+st.query_params["from"] = acq_lo
+st.query_params["to"] = acq_hi
+st.caption("현재 화면 링크")
+st.code(st.context.url, language=None)
+
 # ── 획득 퍼널 · 유지 퍼널 (탭 + 부분 재실행) ───────────────────────
-# 8주차 화요일: 기간 필터를 바꿔도 이 탭 안만 다시 그려지도록 @st.fragment로 뺐다.
+# 8주차 화요일: 나머지(구간 선택 등)는 바꿔도 이 탭 안만 다시 그려지도록
+# @st.fragment로 뺐다. 필터(dim·기간)만 위에서 fragment 밖으로 옮겼다.
 
 
 @st.fragment
-def _render_acquisition_tab():
+def _render_acquisition_tab(dim: str, lo: str, hi_m: str):
     ui.section("획득 퍼널", "그레인을 먼저 확인한다")
 
-    months = sorted(t["08_결산체크리스트"]["회계기간"].astype(str).unique())
-    lo, hi_m = st.select_slider("기간", options=months,
-                                value=(months[0], months[-1]), key="acq_period")
     df = t["08_결산체크리스트"]
     df = df[(df["회계기간"].astype(str) >= lo) & (df["회계기간"].astype(str) <= hi_m)]
 
@@ -104,28 +149,40 @@ def _render_acquisition_tab():
             )
 
         with right:
-            # ★ Day3 — 분해 축. 내 데이터의 컬럼명으로 바꾼다.
-            DIMS = ["device", "channel"]
-            dim = st.radio("분해 축", DIMS, horizontal=True,
-                           label_visibility="collapsed")
             i = st.selectbox(
                 "구간", range(len(f) - 1),
                 format_func=lambda i: f"{f.label.iloc[i]} → {f.label.iloc[i+1]}",
                 index=min(bi - 1, len(f) - 2))
-            g = ui.guard(M.funnel_by, df, df, dim,
-                         f.step.iloc[i], f.step.iloc[i + 1])
-            if g is not None and len(g):
-                st.plotly_chart(charts.device_compare(g), width="stretch",
-                                config={"displayModeBar": False})
-                hi = g.loc[g.전환율.idxmax()]
-                lo2 = g.loc[g.전환율.idxmin()]
-                if hi[g.columns[0]] != lo2[g.columns[0]]:
-                    ui.callout(
-                        f"<b>{lo2[g.columns[0]]}</b>이(가) 전체의 "
-                        f"<b>{lo2.비중*100:.1f}%</b>인데 전환율은 "
-                        f"<b>{lo2.전환율*100:.1f}%</b>로 "
-                        f"{hi[g.columns[0]]}({hi.전환율*100:.1f}%)보다 "
-                        f"<b>{(hi.전환율-lo2.전환율)*100:.1f}%p 낮습니다.</b>")
+            g_all = ui.guard(M.funnel_by, df, df, dim,
+                              f.step.iloc[i], f.step.iloc[i + 1])
+            if g_all is not None and len(g_all):
+                # 8주차 목요일 — 못 믿을 칸(표본 부족)은 계산된 전환율을
+                # 차트에 넘기지 않는다. 넘기지 않는 것이지 회색으로 숨기는 게 아니다.
+                dim_col = g_all.columns[0]
+                g_all = g_all.assign(
+                    _사유=g_all["도달"].apply(lambda n: M.trust_check(int(n))))
+                g = g_all[g_all["_사유"].isna()].drop(columns="_사유")
+                hidden = g_all[g_all["_사유"].notna()]
+                if len(hidden):
+                    st.caption(f"⚠ {len(hidden)}개 칸 감춤")
+                    for _, r in hidden.iterrows():
+                        if st.button(f"{r[dim_col]} — 왜 감췄나?",
+                                     key=f"why_{dim}_{r[dim_col]}"):
+                            _why_hidden(str(r[dim_col]), dim_col, r["_사유"])
+                if len(g):
+                    st.plotly_chart(charts.device_compare(g), width="stretch",
+                                    config={"displayModeBar": False})
+                    hi = g.loc[g.전환율.idxmax()]
+                    lo2 = g.loc[g.전환율.idxmin()]
+                    if hi[dim_col] != lo2[dim_col]:
+                        ui.callout(
+                            f"<b>{lo2[dim_col]}</b>이(가) 전체의 "
+                            f"<b>{lo2.비중*100:.1f}%</b>인데 전환율은 "
+                            f"<b>{lo2.전환율*100:.1f}%</b>로 "
+                            f"{hi[dim_col]}({hi.전환율*100:.1f}%)보다 "
+                            f"<b>{(hi.전환율-lo2.전환율)*100:.1f}%p 낮습니다.</b>")
+                else:
+                    st.caption("모든 칸이 표본 부족으로 감춰졌습니다.")
 
 
 @st.fragment
@@ -162,9 +219,61 @@ def _render_retention_tab():
 
 tab_acq, tab_ret = st.tabs(["획득 퍼널", "유지 퍼널"])
 with tab_acq:
-    _render_acquisition_tab()
+    _render_acquisition_tab(dim, acq_lo, acq_hi)
 with tab_ret:
     _render_retention_tab()
+
+# ── 반기 비교 (실험이 없는 도메인의 판정 카드) ──────────────────────
+ui.section("반기 비교", "믿을 수 있는지 먼저 보고, 그 다음에 지표를 본다")
+hc = ui.guard(M.half_year_comparison, t)
+if hc is not None:
+    cls = hc["color"]
+    head = (f'<div class="exp {cls}">'
+            f'<div style="display:flex;align-items:flex-start;gap:12px">'
+            f'<div style="flex:1"><div class="id">{hc["period_a"]} → {hc["period_b"]}</div>'
+            f'<div class="nm">{hc["primary"]} 비교</div></div>'
+            f'<div>{ui.badge(cls, hc["verdict"])}</div></div>')
+    if hc["verdict"] == "무효":
+        head += (f'<div class="blocked"><b>✕ 지표를 표시하지 않습니다</b><br>'
+                 f'{hc["reason"]}</div>')
+        st.markdown(head + "</div>", unsafe_allow_html=True)
+        if st.button("왜 감췄나?", key="why_half_year"):
+            _why_hidden(f"{hc['period_a']} vs {hc['period_b']}", "반기 비교", hc["reason"])
+    else:
+        head += (f'<div style="margin-top:14px;display:flex;gap:28px;'
+                 f'align-items:baseline;flex-wrap:wrap">'
+                 f'<div><div style="font-size:11px;color:#64748b">{hc["primary"]}</div>'
+                 f'<div class="mv">{hc["r1"]:.1f}% → {hc["r2"]:.1f}% '
+                 f'({hc["delta"]:+.1f}%p)</div></div>'
+                 f'<div><div style="font-size:11px;color:#64748b">가드레일 · {hc["guardrail"]}</div>'
+                 f'<div class="mv">{hc["g1"]:.1f}% → {hc["g2"]:.1f}% '
+                 f'({hc["g_delta"]:+.1f}%p)</div></div>'
+                 f'<div><div style="font-size:11px;color:#64748b">표본</div>'
+                 f'<div style="font-size:13px;color:#475569" class="num">'
+                 f'{hc["n1"]:,} / {hc["n2"]:,}</div></div></div>')
+        if hc["reason"]:
+            head += (f'<div style="margin-top:8px;font-size:13px;color:#64748b">'
+                     f'{hc["reason"]}</div>')
+        head += ('<div style="margin-top:10px;font-size:12px;color:#94a3b8">'
+                 '이 비교는 인과를 주장할 수 없습니다. 무작위 배정이 없었으므로 '
+                 '다른 요인의 영향을 배제하지 못합니다.</div>')
+        st.markdown(head + "</div>", unsafe_allow_html=True)
+
+    # 8주차 목요일 — 판정 과정을 펼쳐서 보여준다. 결과는 접힌 채로 먼저 보인다.
+    with st.status("판정 과정", expanded=False) as box:
+        st.write(f"1) 못 믿을 조건 확인 — "
+                 f"{'걸림: ' + hc['reason'] if hc['verdict'] == '무효' else '통과'}")
+        if hc["verdict"] == "무효":
+            st.write("2) 주지표 — 계산하지 않음")
+            st.write("3) 가드레일 — 계산하지 않음")
+            box.update(label=f"판정: {hc['verdict']}", state="error")
+        else:
+            st.write(f"2) 주지표({hc['primary']}) — "
+                     f"{hc['r1']:.1f}% → {hc['r2']:.1f}% ({hc['delta']:+.1f}%p)")
+            st.write(f"3) 가드레일({hc['guardrail']}) — "
+                     f"{hc['g1']:.1f}% → {hc['g2']:.1f}% ({hc['g_delta']:+.1f}%p)"
+                     + (" ← 여기서 갈렸다" if hc["verdict"] == "주의 필요" else ""))
+            box.update(label=f"판정: {hc['verdict']}", state="complete")
 
 # ── 실험 ──────────────────────────────────────────────────────────
 ui.section("실험 결과", "믿을 수 있는지 먼저 보고, 그 다음에 지표를 본다")
