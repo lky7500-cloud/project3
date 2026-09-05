@@ -94,8 +94,16 @@ def build_pdf(sections: list[dict], charts: dict[str, bytes],
         pdf.cell(0, 8, s["title"] + mark, new_x="LMARGIN", new_y="NEXT")
 
     # ── 본문 ──────────────────────────────────────────────────────
-    for s in sections:
-        pdf.add_page()
+    # ★ 장마다 새 페이지를 강제하지 않는다. 짧은 장(배경·제안 등)이 백지 한
+    #   장을 통째로 먹어 여백만 남기던 문제라, 자리가 남으면 이어 쓰고
+    #   페이지 아래쪽(240mm 이후)에 걸릴 때만 새 페이지로 넘긴다.
+    pdf.add_page()
+    for i, s in enumerate(sections):
+        if i > 0:
+            if pdf.get_y() > 240:
+                pdf.add_page()
+            else:
+                pdf.ln(10)
         pdf.set_font(pdf.base, "B", 15)
         pdf.set_text_color(*INK)
         pdf.multi_cell(0, 9, s["title"])
