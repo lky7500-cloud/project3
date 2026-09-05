@@ -16,12 +16,14 @@ from __future__ import annotations
 from datetime import datetime
 
 from core import config as C, metrics as M
-from core.todo import todo
 
 # ★ 자동 생성 문장에 인과를 단정하는 말을 쓰지 않는다.
 #   관측 데이터로는 인과를 주장할 수 없는데, 방심하면 자동 문장이 인과를 쓴다.
 #   내 도메인에만 있는 단정 표현이 있으면 여기에 더한다.
-BANNED = ["때문에", "덕분에", "효과로", "입증되었", "증명되었", "확실히"]
+#   8주차 금요일 — 회계세무팀 리포트에 흔한 표현을 더했다(기여하였다·제고·견인·주효·
+#   성공적으로·유의미한 은 일반적인 단정 표현, 창출했다는 재무 보고서에 특히 흔하다).
+BANNED = ["때문에", "덕분에", "효과로", "입증되었", "증명되었", "확실히",
+          "기여하였다", "제고", "견인", "주효", "성공적으로", "유의미한", "창출했다"]
 
 
 def check_phrasing(text: str) -> list[str]:
@@ -38,93 +40,177 @@ def _fmt(n, unit=""):
 
 # ── 자동으로 쓰는 장 ──────────────────────────────────────────────
 def _s1_summary(t: dict) -> dict:
-    """1. 요약
+    """1. 요약 — 기간·주요 지표·가장 낮은 구간만. 원인은 넣지 않는다.
 
-    ★ Day4 실습 A에서 채웁니다.
-
-    **수치는 쓰되 인과는 쓰지 않는다.** "A가 낮다"는 되고 "B 때문에 A가 낮다"는 안 된다.
-    다 쓰고 나서 check_phrasing() 으로 자기 문장을 검사한다.
-
-    반환: {"title": "1. 요약", "kind": "auto", "body": "..."}
+    8주차 금요일 확정 — metrics.kpis() 가 돌려주는 지표 이름을 그대로 쓴다.
+    (이름을 기억해서 새로 적지 않는다 — 화요일에 카드가 바뀌었을 수 있다.)
     """
-    todo("Day4 실습 A", "1. 요약",
-         "무슨 수치를 요약에 넣습니까? 인과를 단정하지 않고 쓸 수 있습니까?",
-         "report/sections.py  _s1_summary()")
+    df = t[C.TABLES[0]]
+    k = M.kpis(t)
+    f = M.funnel(df)
+    lo, hi = C.PERIOD
+    bi = int(f.index[f.is_bottleneck][0])
+
+    lines = [f"분석 기간: {lo} ~ {hi} ({len(df):,}건)", ""]
+    for name, v in k.items():
+        lines.append(f"{name}: {v['fmt'].format(v['value'])}")
+    lines.append("")
+    lines.append(f"가장 낮은 전환 구간: {f.label.iloc[bi - 1]} → {f.label.iloc[bi]} "
+                 f"({f.step_rate.iloc[bi] * 100:.1f}%)")
+    return {"title": "1. 요약", "kind": "auto", "body": "\n".join(lines)}
 
 
 def _s3_method(t: dict) -> dict:
-    """3. 방법
+    """3. 방법 — 그레인·기간·판정 기준. 결과는 넣지 않는다.
 
-    ★ Day4 실습 A에서 채웁니다.
-
-    **분석 단위(그레인)를 반드시 밝힌다.** 읽는 사람이 숫자를 다시 세어볼 수 있어야 한다.
-    무엇을 어떻게 셌는지, 무엇을 뺐는지, 어떤 검정을 썼는지.
-
-    지표의 정의는 **위키가 원본**이다. 여기서 새로 정의하지 않는다.
+    8주차 금요일 확정.
     """
-    todo("Day4 실습 A", "3. 방법",
-         "분석 단위가 무엇입니까? 무엇을 세고 무엇을 뺐습니까?",
-         "report/sections.py  _s3_method()")
+    df = t[C.TABLES[0]]
+    lo, hi = C.PERIOD
+    n = len(df)
+    lines = [
+        "분석 단위(그레인): 결산체크리스트 항목 1건(체크ID 고유값). 한 항목이 같은 "
+        "단계를 두 번 밟지 않으므로 고유값 처리 없이 행을 그대로 센다.",
+        "",
+        f"데이터 기간: {lo} ~ {hi} ({n:,}건). 결측값 없음.",
+        "",
+        "퍼널 3단계: 등록(전체 행) → 완료(완료여부='Y') → 최종승인(최종승인='Y'). "
+        "'Y' 문자열 정확 일치로 판정한다.",
+        "",
+        "비율 지표(최종승인율·완료율·재작업률)는 보정 없이 전체 건수를 그대로 분모로 "
+        "쓴다. 관측 기간(12개월)이 다른 구간을 누적값으로 비교하지 않으며, 최근 등록분이 "
+        "관측 시간 부족으로 낮게 잡히는 편향이 있는지 이미 확인했다 — 없었다(8주차 화요일).",
+        "",
+        "분해 축: 담당자. 담당자·계정과목·사업부 세 후보 중 격차가 가장 크고(24.7%p), "
+        "모든 구간이 최소 표본(30건, config.MIN_SAMPLE) 이상이라 감춰지는 칸이 없어 "
+        "선택했다(8주차 목요일).",
+    ]
+    return {"title": "3. 방법", "kind": "auto", "body": "\n".join(lines)}
+
+
+# ★ 결과 장의 분해 축. 3장(방법)에 적은 축과 반드시 같아야 한다.
+RESULT_DIM = "담당자"
 
 
 def _s4_results(t: dict) -> dict:
-    """4. 결과
+    """4. 결과 — 단계별 값과 분해 결과만. "왜"는 6장(해석)으로 미룬다.
 
-    ★ Day4 실습 A에서 채웁니다.
-
-    숫자를 나열하되 **해석하지 않는다.** 해석은 6장이고 사람이 쓴다.
-    "낮다"까지가 결과이고 "왜 낮은가"는 해석이다.
-
-    charts 키에 차트 이름을 넣으면 PDF에 그려진다. 예) ["funnel", "device"]
+    8주차 금요일 확정.
     """
-    todo("Day4 실습 A", "4. 결과",
-         "결과와 해석을 섞지 않았습니까? '왜'가 들어갔으면 6장으로 옮기십시오.",
-         "report/sections.py  _s4_results()")
+    df = t[C.TABLES[0]]
+    f = M.funnel(df)
+    bi = int(f.index[f.is_bottleneck][0])
+    step_from, step_to = f.step.iloc[bi - 1], f.step.iloc[bi]
+    g = M.funnel_by(df, df, RESULT_DIM, step_from, step_to)
+    dim_col = g.columns[0]
+
+    lines = ["[단계별 값]"]
+    for r in f.itertuples():
+        rate = f"{r.step_rate * 100:.1f}%" if r.step_rate == r.step_rate else "-"
+        lines.append(f"  {r.label}: {r.n:,}건 (전 단계 대비 {rate})")
+
+    lines.append("")
+    lines.append(f"[분해 결과 — {RESULT_DIM}별 {f.label.iloc[bi - 1]}→{f.label.iloc[bi]} 전환율]")
+    for r in g.itertuples():
+        lines.append(f"  {getattr(r, dim_col)}: {r.도달}건 중 {r.전환}건 ({r.전환율 * 100:.1f}%)")
+
+    best = g.loc[g["전환율"].idxmax()]
+    worst = g.loc[g["전환율"].idxmin()]
+    lines.append("")
+    lines.append(f"{dim_col} 간 격차: {best[dim_col]}({best.전환율 * 100:.1f}%) - "
+                 f"{worst[dim_col]}({worst.전환율 * 100:.1f}%) = "
+                 f"{(best.전환율 - worst.전환율) * 100:.1f}%p")
+    return {"title": "4. 결과", "kind": "auto", "body": "\n".join(lines),
+            "charts": ["funnel", "device"]}
 
 
 def _s5_experiments(t: dict) -> dict:
-    """5. 실험
+    """5. 실험 — 이 도메인엔 실험 테이블이 없다.
 
-    ★ Day4 실습 A에서 채웁니다.
-
-    **무효 판정된 실험은 사유만 적고 수치를 쓰지 않는다.** 화면에서 감춘 숫자를
-    리포트에 쓰면 감춘 의미가 없다. metrics.experiment_results() 의 verdict 를 보고
-    분기한다.
-
-    실험이 없으면 이 장을 빼거나, 전후 비교를 적되
-    **"인과를 주장할 수 없다"를 같은 문단에 남긴다.**
+    ★ 「내 도메인이라면」— 실험 대신 반기(상반기/하반기) 전후 비교를 쓴다.
+    무작위 배정이 없으므로 **"인과를 주장할 수 없다"를 본문 첫 문단에 넣는다**
+    (각주가 아니라 본문에). 무효 판정이면 사유만 적고 수치를 쓰지 않는다
+    (8주차 목요일 half_year_comparison() 이 무효일 때 계산 자체를 하지 않으므로,
+    여기서는 애초에 r1·r2 같은 키가 없다 — 실수로 꺼내 쓸 수가 없다).
     """
-    todo("Day4 실습 A", "5. 실험",
-         "무효 실험의 수치를 쓰지 않았습니까? 실험이 없으면 이 장을 뺍니까?",
-         "report/sections.py  _s5_experiments()")
+    hc = M.half_year_comparison(t)
+    lines = ["이 비교는 관측 데이터를 시점으로 나눈 전후 비교이며, 무작위 배정이 없었으므로 "
+             "인과를 주장할 수 없다.", ""]
+    if hc["verdict"] == "무효":
+        lines.append(f"{hc['period_a']} vs {hc['period_b']}: 무효 — {hc['reason']}")
+    else:
+        lines.append(
+            f"{hc['period_a']}({hc['n1']}건) vs {hc['period_b']}({hc['n2']}건) — "
+            f"주지표 {hc['primary']} {hc['r1']:.1f}% → {hc['r2']:.1f}% "
+            f"({hc['delta']:+.1f}%p), 가드레일 {hc['guardrail']} "
+            f"{hc['g1']:.1f}% → {hc['g2']:.1f}% ({hc['g_delta']:+.1f}%p). "
+            f"판정: {hc['verdict']}" + (f" — {hc['reason']}" if hc['reason'] else ""))
+    return {"title": "5. 실험", "kind": "auto", "body": "\n".join(lines)}
 
 
-def _s7_limits(t: dict) -> dict:
-    """7. 한계 — 검증 경고에서 조립한다
-
-    ★ Day4 실습 D에서 채웁니다. ← 오늘의 두 번째 장면
-
-    **사람이 매번 쓰는 것이 아니라 경고를 그대로 옮긴다.**
-    검증에서 경고가 났는데 한계에 안 적히면 **그 경고는 사라진 것과 같다.**
-
-    한계는 세 곳에서 온다.
+def s7_limit_rows(t: dict) -> list[dict]:
+    """한계 절 후보 행. [{"출처":.., "내용":..}, ...]. _s7_limits() 와 실습 G의
+    편집 표(pages/3_리포트.py)가 함께 쓴다. 출처는 세 가지뿐이다.
 
         검증 경고        validate.run_checks() 에서 level == "warn" 인 것
-        못 한 것         표본이 모자라 판정 못 한 것 · 기간이 짧아 못 본 것
-        찾았는데 없던 것  **"없음"도 결과다**
+        못 한 것         표본이 모자라 판정 못 한 것 · 데이터에 없어 못 본 것
+        찾았는데 없음     찾아봤지만 신호가 없었던 것 — "없음"도 결과다
 
-    7주차에 판정한 것들이 여기로 들어온다.
-
-        생존 편향 판정          관측 기간이 다른 대상을 비교했던 것
-        선행지표 부재           찾았지만 없었다 — 있었으면 무엇을 봤을까
-        검출 불가 판정          표본·기간이 안 돼 못 돌린 실험
-
-    그리고 **가정값이 들어간 문장에는 "가정값 기반"을 붙인다.**
-    실측값과 가정값이 한 문단에 섞이면 읽는 사람은 둘 다 실측으로 읽는다.
+    8주차 금요일 확정.
     """
-    todo("Day4 실습 D", "7. 한계",
-         "검증 경고를 전부 옮겼습니까? 7주차에 판정한 것 3건이 들어갔습니까?",
-         "report/sections.py  _s7_limits()")
+    from core import validate as V
+
+    df = t[C.TABLES[0]]
+    rows = [{"출처": "검증 경고", "내용": f"{w['name']}: {w['msg']}"}
+            for w in V.run_checks(t) if w["level"] == "warn"]
+
+    f = M.funnel(df)
+    bi = int(f.index[f.is_bottleneck][0])
+    step_from, step_to = f.step.iloc[bi - 1], f.step.iloc[bi]
+    for dim in ["담당자", "계정과목", "사업부"]:
+        g = M.funnel_by(df, df, dim, step_from, step_to)
+        dim_col = g.columns[0]
+        for r in g.itertuples():
+            reason = M.trust_check(int(r.도달))
+            if reason:
+                rows.append({"출처": "못 한 것",
+                              "내용": f"{dim_col}={getattr(r, dim_col)}: {reason}로 "
+                                      f"{f.label.iloc[bi - 1]}→{f.label.iloc[bi]} "
+                                      f"전환율을 판정하지 않았다"})
+
+    rows.append({"출처": "못 한 것",
+                 "내용": "유지 퍼널(계정과목×회계기간)은 칸당 표본이 1~7건뿐이라 "
+                         "참고 신호로만 썼다(CLAUDE.md 유지 퍼널 절)."})
+    rows.append({"출처": "못 한 것",
+                 "내용": "최종승인자(결재자) 식별 컬럼과 재작업 사유 컬럼이 데이터에 "
+                         "없어, 담당자 본인이 자기 항목을 승인했는지·재작업이 반복되는 "
+                         "구체적 사유는 이 데이터로 확인할 수 없다."})
+    rows.append({"출처": "찾았는데 없음",
+                 "내용": "재작업(검토횟수 3회 이상)이 지연일수를 늘리는지 확인했으나, 재작업 "
+                         "건의 평균 지연일수(1.1일)가 재작업이 아닌 건(1.4일)보다 "
+                         "오히려 짧아 뚜렷한 관련이 없었다."})
+    rows.append({"출처": "찾았는데 없음",
+                 "내용": "월별 완료율 변동(표준편차 4.3%p)이 작아, 분기 말·연말에 "
+                         "몰리는 계절성이라 부를 만한 패턴은 나타나지 않았다."})
+    return rows
+
+
+def _s7_limits(t: dict, rows: list[dict] | None = None) -> dict:
+    """7. 한계 — 세 출처에서 조립한다. 화면에서 "포함"을 끈 행은 여기 안 들어온다.
+
+    8주차 금요일 확정 — 인과 주장 불가·기간 한계 두 문장은 편집 대상이 아니라
+    항상 붙는 정책 문구라서, 편집 가능한 rows 와 분리해 여기서 직접 붙인다.
+    """
+    if rows is None:
+        rows = s7_limit_rows(t)
+    lo, hi = C.PERIOD
+    lines = [f"[{r['출처']}] {r['내용']}" for r in rows]
+    if not any(r["출처"] == "검증 경고" for r in rows):
+        lines.insert(0, "[검증 경고] 이번 실행에서는 warn 레벨 경고가 없었다 "
+                        "(행 수·필수 컬럼·날짜 범위 모두 통과).")
+    lines.append("관측 데이터이므로 인과를 주장할 수 없다.")
+    lines.append(f"기간이 {lo} ~ {hi}이므로 그보다 긴 주기의 변화는 관측되지 않는다.")
+    return {"title": "7. 한계", "kind": "auto", "body": "\n".join(lines)}
 
 
 # ── 사람이 쓰는 장 (제공) ─────────────────────────────────────────
@@ -164,8 +250,11 @@ def _safe(title: str, fn, *args) -> dict:
         return {"title": title, "kind": "todo", "body": "", "todo": e}
 
 
-def build(t: dict, human: dict | None = None) -> list[dict]:
+def build(t: dict, human: dict | None = None,
+          limit_rows: list[dict] | None = None) -> list[dict]:
     """8장을 조립한다. human 은 사람이 쓴 장의 본문 딕셔너리.
+    limit_rows 를 주면 7장(한계)은 그 행들로 조립한다(실습 G의 편집 결과) —
+    안 주면 s7_limit_rows() 로 매번 새로 조립한다.
 
     **순서와 자동/사람 구분은 바꾸지 않는다.** 장 개수는 도메인에 맞게 줄여도 되지만,
     해석과 제안을 자동으로 돌리는 것만은 하지 않는다.
@@ -178,7 +267,7 @@ def build(t: dict, human: dict | None = None) -> list[dict]:
         _safe("4. 결과", _s4_results, t),
         _safe("5. 실험", _s5_experiments, t),
         _s6_interpretation(human),
-        _safe("7. 한계", _s7_limits, t),
+        _safe("7. 한계", _s7_limits, t, limit_rows),
         _s8_proposal(human),
     ]
 
