@@ -126,50 +126,45 @@ with body:
                 st.session_state.limit_rows = new_rows
                 st.rerun()
 
-    else:  # kind == "human" — 실습 F: 2·6·8장을 폼 하나로 묶는다
-        st.caption("2·6·8장은 폼 하나에서 함께 씁니다. 타이핑 중엔 화면이 다시 "
-                   "그려지지 않고, 저장을 눌러야 반영됩니다.")
-        placeholders = {s["title"]: s["placeholder"] for s in secs
-                        if s["kind"] == "human"}
+    else:  # kind == "human" — 실습 F: 저장을 눌러야 반영되는 폼
+        # ★ 목차에서 고른 장 하나만 보여준다. 2·6·8장을 한 폼으로 묶은 첫
+        #   버전은 배경을 골라도 해석·제안까지 전부 떴다 — 폼(재실행 방지)과
+        #   "고른 것만 보인다"는 둘 다 필요해서, 장마다 각자 폼을 쓴다.
+        title = sec["title"]
+        st.caption("타이핑 중엔 화면이 다시 그려지지 않고, 저장을 눌러야 반영됩니다.")
         try:
-            guide = S.human_guide(t)
+            guide = S.human_guide(t).get(title)
         except Exception as e:
-            guide = {}
+            guide = None
             st.caption(f"⚠ 작성 가이드를 만들지 못했습니다({e}). 폼은 그대로 씁니다.")
-        for title in HUMAN_TITLES:
-            existing = st.session_state.human.get(title, "")
-            if existing.strip():
-                bad = S.check_phrasing(existing)
-                if bad:
-                    ui.callout(f"<b>{title}</b>에 인과를 단정하는 표현이 있습니다: "
-                              f"<b>{', '.join(bad)}</b>.")
-        with st.form("사람이 쓰는 장"):
-            drafts = {}
-            for title in HUMAN_TITLES:
-                g = guide.get(title)
-                if g:
-                    st.markdown(
-                        '<div class="callout info" style="margin-bottom:6px">'
-                        '<b>이 장에서 설명하면 좋은 내용</b><br>'
-                        + "".join(f"· {x}<br>" for x in g["suggest"])
-                        + '<div style="margin-top:8px"><b>담당자가 직접 결정할 '
-                          '내용</b></div>'
-                        + "".join(f"· {x}<br>" for x in g["decide"])
-                        + '</div>', unsafe_allow_html=True)
-                drafts[title] = st.text_area(
-                    title, value=st.session_state.human.get(title, ""),
-                    placeholder=placeholders[title], height=150,
-                    key=f"form_{title}")
+
+        existing = st.session_state.human.get(title, "")
+        if existing.strip():
+            bad = S.check_phrasing(existing)
+            if bad:
+                ui.callout(f"인과를 단정하는 표현이 있습니다: <b>{', '.join(bad)}</b>.")
+
+        if guide:
+            st.markdown(
+                '<div class="callout info" style="margin-bottom:6px">'
+                '<b>이 장에서 설명하면 좋은 내용</b><br>'
+                + "".join(f"· {x}<br>" for x in guide["suggest"])
+                + '<div style="margin-top:8px"><b>담당자가 직접 결정할 '
+                  '내용</b></div>'
+                + "".join(f"· {x}<br>" for x in guide["decide"])
+                + '</div>', unsafe_allow_html=True)
+
+        with st.form(f"form_{title}"):
+            txt = st.text_area(
+                "본문", value=existing, placeholder=sec["placeholder"],
+                height=220, label_visibility="collapsed", key=f"ta_{title}")
             submitted = st.form_submit_button("저장", type="primary")
         if submitted:
-            warn_titles = []
-            for title, txt in drafts.items():
-                st.session_state.human[title] = txt
-                if txt.strip() and S.check_phrasing(txt):
-                    warn_titles.append(title)
-            if warn_titles:
-                st.warning(f"저장했습니다. 다만 인과 단정 표현이 남은 장: "
-                          f"{', '.join(warn_titles)}")
+            st.session_state.human[title] = txt
+            bad = S.check_phrasing(txt) if txt.strip() else []
+            if bad:
+                st.warning(f"저장했습니다. 다만 인과 단정 표현이 남았습니다: "
+                          f"{', '.join(bad)}")
             else:
                 st.success("저장했습니다.")
             # ★ 여기서 st.rerun()을 부르지 않는다 — 부르면 방금 띄운 성공·경고
